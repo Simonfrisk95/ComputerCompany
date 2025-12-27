@@ -1,0 +1,49 @@
+@page "/role-debug"
+@using System.Security.Claims
+@inject AuthenticationStateProvider AuthStateProvider
+
+<h3>Role Debug Information</h3>
+
+@if (authState != null)
+{
+    <div class="card">
+        <div class="card-body">
+            <h5>User Information:</h5>
+            <p><strong>Authenticated:</strong> @authState.User.Identity.IsAuthenticated</p>
+            <p><strong>Name:</strong> @authState.User.Identity.Name</p>
+            
+            <h5>All Claims:</h5>
+            <table class="table table-sm">
+                @foreach (var claim in authState.User.Claims)
+                {
+                    <tr>
+                        <td><strong>@claim.Type</strong></td>
+                        <td>@claim.Value</td>
+                    </tr>
+                }
+            </table>
+
+            <h5>Role-Specific Checks:</h5>
+            <p><strong>IsInRole("Admin"):</strong> @authState.User.IsInRole("Admin")</p>
+            <p><strong>IsInRole("Manager"):</strong> @authState.User.IsInRole("Manager")</p>
+            <p><strong>IsInRole("WarehouseStaff"):</strong> @authState.User.IsInRole("WarehouseStaff")</p>
+
+            <h5>All Roles:</h5>
+            <ul>
+                @foreach (var role in authState.User.Claims.Where(c => c.Type == ClaimTypes.Role))
+                {
+                    <li>@role.Value</li>
+                }
+            </ul>
+        </div>
+    </div>
+}
+
+@code {
+    private AuthenticationState? authState;
+
+    protected override async Task OnInitializedAsync()
+    {
+        authState = await AuthStateProvider.GetAuthenticationStateAsync();
+    }
+}

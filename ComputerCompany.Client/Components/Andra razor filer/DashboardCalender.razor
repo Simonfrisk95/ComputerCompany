@@ -1,0 +1,72 @@
+@using System
+
+<!-- 
+    Calendar Card Component
+    Displays a date picker, a week overview, daily badges, 
+    and a list of upcoming events.
+-->
+
+<div class="card flex-fill w-100">
+    <div class="card-header">
+        <h5 class="card-title mb-0">Calendar</h5>
+    </div>
+    <div class="card-body">
+        <!-- Date picker -->
+        <input type="date" class="form-control mb-3" @bind="SelectedDate" />
+
+        <!-- Week overview -->
+        <div class="d-flex justify-content-between mb-2">
+            @foreach (var day in WeekDays)
+            {
+                <span class="text-muted small">@day</span>
+            }
+        </div>
+
+        <!-- Daily badges -->
+        <div class="d-flex justify-content-between mb-3 flex-wrap">
+            @foreach (var badge in DailyBadges)
+            {
+                <span class="badge @badge.CssClass rounded-pill w-auto mx-1 text-truncate" title="@badge.Title">
+                    @badge.Title
+                </span>
+            }
+        </div>
+
+        <!-- Upcoming events list -->
+        <ul class="list-group list-group-flush">
+            @foreach (var evt in UpcomingEvents)
+            {
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                    @evt.Title
+                    <span class="badge @evt.CssClass rounded-pill">@evt.DateText</span>
+                </li>
+            }
+        </ul>
+    </div>
+</div>
+
+@code {
+    private DateTime SelectedDate { get; set; } = DateTime.Today;
+
+    private string[] WeekDays = { "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" };
+    private List<BadgeItem> DailyBadges = new()
+    {
+        new BadgeItem("Meeting", "bg-primary"),
+        new BadgeItem("Delivery", "bg-success"),
+        new BadgeItem("Audit", "bg-warning"),
+        new BadgeItem("Shipment", "bg-danger"),
+        new BadgeItem("Inventory", "bg-info")
+    };
+
+    private List<EventItem> UpcomingEvents = new()
+    {
+        new EventItem("Delivery #123", "Today", "bg-success"),
+        new EventItem("Supplier Meeting", "Tomorrow", "bg-warning"),
+        new EventItem("Stock Audit", "12 Oct", "bg-info"),
+        new EventItem("Shipment #45", "14 Oct", "bg-danger"),
+        new EventItem("Inventory Check", "15 Oct", "bg-primary")
+    };
+
+    private record BadgeItem(string Title, string CssClass);
+    private record EventItem(string Title, string DateText, string CssClass);
+}

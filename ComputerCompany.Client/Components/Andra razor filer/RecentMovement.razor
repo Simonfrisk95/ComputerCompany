@@ -1,0 +1,46 @@
+@using System
+
+<div class="card flex-fill w-100">
+    <div class="card-header">
+        <h5 class="card-title mb-0">Recent Movement</h5>
+    </div>
+    <div class="card-body py-3">
+        @if (Movements == null || !Movements.Any())
+        {
+            <div class="bg-light p-3 rounded text-center">
+                <i class="align-middle text-muted" data-feather="activity" style="font-size: 3rem;"></i>
+                <div class="mt-2 text-muted">No recent movements yet</div>
+            </div>
+        }
+        else
+        {
+            <ul class="list-group list-group-flush">
+                @foreach (var item in Movements)
+                {
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        @item.Description
+                        <span class="badge @item.CssClass rounded-pill">@item.TimeText</span>
+                    </li>
+                }
+            </ul>
+        }
+    </div>
+</div>
+
+@code {
+
+    // Sample data for recent movements
+    private List<MovementItem> Movements = new()
+    {
+        new MovementItem("Inbound delivery #123", "2h ago", "bg-success"),
+        new MovementItem("Order #456 picked", "5h ago", "bg-warning"),
+        new MovementItem("Shipment #789 sent", "1d ago", "bg-info"),
+        new MovementItem("Inventory audit completed", "2d ago", "bg-primary"),
+        new MovementItem("New product added: Sneakers", "3d ago", "bg-secondary"),
+        new MovementItem("Order #1011 packed", "4d ago", "bg-dark"),
+        new MovementItem("Return #1213 processed", "5d ago", "bg-danger")
+    };
+
+    // Movement item model
+    private record MovementItem(string Description, string TimeText, string CssClass);
+}

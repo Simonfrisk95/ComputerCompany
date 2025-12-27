@@ -1,0 +1,224 @@
+@page "/inbound"
+@inject InboundApi InboundService
+@using ShoeCompany.Client.Services
+@using ShoeCompany.Shared.DTO
+@using ShoeCompany.Client.components
+@rendermode InteractiveWebAssembly
+@inject Microsoft.JSInterop.IJSRuntime JS
+
+@attribute [Authorize]
+
+<h3 class="mb-3">Inbound Deliveries</h3>
+
+<div class="d-flex gap-2 flex-wrap align-items-center mb-3">
+    <form @onsubmit="OnSubmit" @onsubmit:preventDefault>
+        <div class="input-group">
+            <select class="form-select" style="max-width:140px" @bind="searchTarget">
+                <option value="SKU">SKU</option>
+                <option value="Supplier">Supplier</option>
+            </select>
+
+            <input class="form-control" style="max-width:360px" placeholder="Search by supplier / SKU"
+                @bind="searchText" />
+            <button type="submit" class="btn btn-primary">Search</button>
+        </div>
+    </form>
+
+    <button class="btn btn-outline-secondary ms-auto" @onclick="ResetFilters">Reset</button>
+    <button class="btn btn-primary" @onclick="OpenCreate">+ New Inbound</button>
+</div>
+
+<InboundTable Items="paged.Items" Total="paged.Total" Skip="paged.Skip" Take="paged.Take" OnDelete="DeleteAsync"
+    OnPageChange="ChangePage" />
+
+<InboundModal @bind-IsOpen="isModalOpen" Title="@modalTitle" Model="createModel" OnSave="CreateAsync"
+    OnCancel="CloseModal" />
+
+@code {
+
+    /// <summary>
+    /// Handles the search form submit. I call the async search so the page doesn't reload.
+    /// </summary>
+    /// <returns>A task that finishes after the search runs.</returns>
+    private async Task OnSubmit() => await SearchAsync();
+
+    /// <summary>
+    /// Builds an empty pagination result with the given skip/take.
+    /// I use this when the API returns null so the UI still renders safely.
+    /// </summary>
+    /// <param name="skip">How many items are skipped (offset).</param>
+    /// <param name="take">How many items to take (page size).</param>
+    /// <returns>An empty <see cref="PaginationResult{InboundDetailsDto}"/>.</returns>
+    private static PaginationResult<InboundDetailsDto> Empty(int skip, int take)
+    {
+        return new() { Skip = skip, Take = take, Total = 0, Items = Array.Empty<InboundDetailsDto>() };
+    }
+
+    private PaginationResult<InboundDetailsDto> paged = new()
+    {
+        Skip = 0,
+        Take = 10,
+        Total = 0,
+        Items = Array.Empty<InboundDetailsDto>()
+    };
+
+    private string searchText = string.Empty;
+    private string searchTarget = "SKU";
+
+    private string selectedSupplier = "All suppliers";
+    private List<string> supplierOptions = new() { "All suppliers" };
+    private string supplier = string.Empty;
+    private string SKU = string.Empty;
+
+    private bool isModalOpen;
+    private string modalTitle = "New Inbound";
+    private CreateInboundDeliveryDto createModel = new();
+
+    /// <summary>
+    /// Loads the first page when the component starts.
+    /// </summary>
+    /// <returns>A task that finishes after the first load.</returns>
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    /// <summary>
+    /// Loads a page of inbound deliveries from the API.
+    /// If skip or take are not given, it uses the current values in <c>paged</c>.
+    /// </summary>
+    /// <param name="skip">Optional new skip (offset).</param>
+    /// <param name="take">Optional new take (page size).</param>
+    /// <returns>A task that finishes after the page is loaded.</returns>
+    private async Task LoadAsync(int? skip = null, int? take = null)
+    {
+        var s = skip ?? paged.Skip;
+        var t = take ?? paged.Take;
+
+        var result = await InboundService.ListPagedAsync(s, t);
+        paged = result ?? Empty(s, t);
+    }
+
+    /// <summary>
+    /// Applies the search to either Supplier or SKU based on the current target,
+    /// then calls the search API starting from the first page.
+    /// </summary>
+    /// <param name="text">The text typed by the user.</param>
+    /// <returns>A task that finishes after results are loaded.</returns>
+    private async Task DoSearch(string text)
+    {
+        var txt = text?.Trim() ?? string.Empty;
+
+        if (searchTarget == "Supplier")
+        {
+            supplier = txt;
+            SKU = string.Empty;
+        }
+        else
+        {
+            supplier = string.Empty;
+            SKU = txt;
+        }
+
+        var result = await InboundService.SearchAsync(
+        skip: 0,
+        take: paged.Take,
+        supplier: supplier,
+        sku: SKU);
+
+        paged = result ?? Empty(0, paged.Take);
+    }
+
+    /// <summary>
+    /// Runs a search using whatever text is currently in the input box.
+    /// </summary>
+    /// <returns>A task that finishes after the search.</returns>
+    private async Task SearchAsync()
+    {
+        // take the current text in the input and perform the search
+        await DoSearch(searchText);
+    }
+
+    /// <summary>
+    /// Clears all filters and reloads the first page.
+    /// </summary>
+    /// <returns>A task that finishes after reload.</returns>
+    private async Task ResetFilters()
+    {
+        searchText = string.Empty;
+        supplier = string.Empty;
+        SKU = string.Empty;
+        await LoadAsync(0, paged.Take);
+    }
+
+    /// <summary>
+    /// Handles a page change coming from the table (tuple version).
+    /// </summary>
+    /// <param name="page">The new (skip, take) values.</param>
+    /// <returns>A task that finishes after the correct page is loaded.</returns>
+    private Task ChangePage((int skip, int take) page)
+    {
+        return ChangePage(page.skip, page.take);
+    }
+
+    /// <summary>
+    /// Changes to a specific page and keeps any active filters (supplier/SKU).
+    /// </summary>
+    /// <param name="skip">The new offset to load.</param>
+    /// <param name="take">The page size.</param>
+    /// <returns>A task that finishes after the page is loaded.</returns>
+    private async Task ChangePage(int skip, int take)
+    {
+        // IMPORTANT: pass BOTH supplier and sku if there is an active filter
+        var hasFilter = !string.IsNullOrWhiteSpace(supplier) || !string.IsNullOrWhiteSpace(SKU);
+
+        var result = hasFilter
+        ? await InboundService.SearchAsync(skip, take, supplier: supplier, sku: SKU)
+        : await InboundService.ListPagedAsync(skip, take);
+
+        paged = result ?? Empty(skip, take);
+    }
+
+    /// <summary>
+    /// Opens the create modal with a fresh model.
+    /// </summary>
+    /// <returns>Nothing.</returns>
+    private void OpenCreate()
+    {
+        modalTitle = "New Inbound";
+        createModel = new();
+        isModalOpen = true;
+    }
+
+    /// <summary>
+    /// Creates a new inbound delivery using the modal's data, then reloads the list.
+    /// </summary>
+    /// <param name="dto">The data for the new inbound delivery.</param>
+    /// <returns>A task that finishes after create and reload.</returns>
+    private async Task CreateAsync(CreateInboundDeliveryDto dto)
+    {
+        await InboundService.CreateAsync(dto);
+        await LoadAsync();
+    }
+
+    /// <summary>
+    /// Closes the modal dialog.
+    /// </summary>
+    /// <returns>A completed task.</returns>
+    private Task CloseModal()
+    {
+        isModalOpen = false;
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Deletes an inbound delivery after user confirmation, then reloads the list if delete succeeds.
+    /// </summary>
+    /// <param name="row">The row (with Id) to delete.</param>
+    /// <returns>A task that finishes after delete and any reload.</returns>
+    private async Task DeleteAsync(InboundDetailsDto row)
+    {
+        if (await JS.InvokeAsync<bool>("confirm", $"Delete inbound #{row.Id}?"))
+        {
+            if (await InboundService.DeleteAsync(row.Id))
+                await LoadAsync();
+        }
+    }
+}

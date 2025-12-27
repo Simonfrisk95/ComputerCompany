@@ -1,0 +1,362 @@
+﻿@using ShoeCompany.Shared.DTO
+@using ShoeCompany.Client.Services
+@inject OrderFlowApi OrderService
+@inject IJSRuntime JS
+
+@if (Items is null || !Items.Any())
+{
+    <div class="alert alert-secondary">No data to display.</div>
+}
+else
+{
+    <table class="table table-bordered table-hover align-middle">
+        <thead class="table-dark">
+            <tr>
+                <th style="width:6%; cursor:pointer" @onclick="() => SortBy(SortColumn.Id)">
+                    Order ID @SortIndicator(SortColumn.Id)
+                </th>
+                <th style="width:10%; cursor:pointer" @onclick="() => SortBy(SortColumn.Date)">
+                    Date @SortIndicator(SortColumn.Date)
+                </th>
+                <th style="width:12%; cursor:pointer" @onclick="() => SortBy(SortColumn.Status)">
+                    Status @SortIndicator(SortColumn.Status)
+                </th>
+                <th style="width:12%; cursor:pointer" @onclick="() => SortBy(SortColumn.Items)">
+                    Items @SortIndicator(SortColumn.Items)
+                </th>
+                <th class="text-center" style="width:30%">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var item in GetSortedItems())
+            {
+                // Compute valid actions once per row to render a consistent grid
+                var nexts = OrderStatusHelper.GetNext(item.Status);
+                bool canSend    = nexts.Contains("Sent");
+                bool canPicked  = nexts.Contains("Picked");
+                bool canShip    = nexts.Contains("Shipped");
+                bool canDeliver = nexts.Contains("Delivered");
+                bool canCancel  = nexts.Contains("Cancelled");
+                bool canEdit    = OrderStatusHelper.CanEdit(item.Status);
+                bool canDelete  = OrderStatusHelper.CanDelete(item.Status);
+                bool isBusy     = BusyIds.Contains(item.Id);
+            
+                <tr>
+                    <td>@item.Id</td>
+                    <td>@item.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd")</td>
+                    <td>
+                        <span class="@OrderStatusHelper.GetBadgeClass(item.Status)">
+                            @OrderStatusHelper.Label(item.Status)
+                        </span>
+                    </td>
+                    <td>
+                        <div class="d-flex align-items-center gap-2">
+                            <span class="badge bg-secondary me-2"><strong>@item.LineCount</strong></span>
+                            <button class="btn btn-sm btn-outline-secondary"
+                                    title="Show/Hide lines"
+                                    @onclick="() => Toggle(item.Id)">
+                                @(Expanded.Contains(item.Id) ? "Hide details" : "View details")
+                            </button>
+                        </div>
+                    </td>
+
+                    <td class="text-center">
+                        <!-- Fixed 7-column grid so every action aligns vertically across rows -->
+                        <div class="d-grid"
+                             style="grid-template-columns: repeat(7, max-content); gap: .25rem .5rem; justify-content:center;">
+                            @* 1. Send *@
+                            @if (canSend)
+                            {
+                                <button class="btn btn-sm btn-outline-secondary"
+                                        disabled="@isBusy"
+                                        title="Send"
+                                        @onclick=@(() => ChangeStatusAsync(item.Id, "Sent"))>
+                                    Send
+                                </button>
+                            }
+                            else { <span class="btn btn-sm invisible">Send</span> }
+
+                            @* 2. Mark Picked *@
+                            @if (canPicked)
+                            {
+                                <button class="btn btn-sm btn-outline-secondary"
+                                        disabled="@isBusy"
+                                        title="Mark Picked"
+                                        @onclick="@(() => ChangeStatusAsync(item.Id, "Picked"))">
+                                    Mark Picked
+                                </button>
+                            }
+                            else { <span class="btn btn-sm invisible">Mark Picked</span> }
+
+                            @* 3. Ship *@
+                            @if (canShip)
+                            {
+                                <button class="btn btn-sm btn-outline-secondary"
+                                        disabled="@isBusy"
+                                        title="Ship"
+                                        @onclick="@(() => ChangeStatusAsync(item.Id, "Shipped"))">
+                                    Ship
+                                </button>
+                            }
+                            else { <span class="btn btn-sm invisible">Ship</span> }
+
+                            @* 4. Deliver *@
+                            @if (canDeliver)
+                            {
+                                <button class="btn btn-sm btn-outline-secondary"
+                                        disabled="@isBusy"
+                                        title="Deliver"
+                                        @onclick="@(() => ChangeStatusAsync(item.Id, "Delivered"))">
+                                    Deliver
+                                </button>
+                            }
+                            else { <span class="btn btn-sm invisible">Deliver</span> }
+
+                            @* 5. Cancel *@
+                            @if (canCancel)
+                            {
+                                <button class="btn btn-sm btn-outline-secondary"
+                                        disabled="@isBusy"
+                                        title="Cancel"
+                                        @onclick="@(() => ChangeStatusAsync(item.Id, "Cancelled"))">
+                                    Cancel
+                                </button>
+                            }
+                            else { <span class="btn btn-sm invisible">Cancel</span> }
+
+                            @* 6. Edit (Draft only) *@
+                            <button class="btn btn-sm btn-primary"
+                                    disabled="@(isBusy || !canEdit)"
+                                    title="Edit"
+                                    @onclick="() => EditAsync(item.Id)">
+                                Edit
+                            </button>
+
+                            @* 7. Delete (Draft only) *@
+                            <button class="btn btn-sm btn-danger"
+                                    disabled="@(isBusy || !canDelete)"
+                                    title="Delete"
+                                    @onclick="() => DeleteAsync(item.Id)">
+                                Delete
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+
+                @if (Expanded.Contains(item.Id))
+                {
+                    <tr class="table-light">
+                        <td colspan="5">
+                            @if (item.Items?.Any() == true)
+                            {
+                                <div class="table-responsive">
+                                    <table class="table table-sm mb-0">
+                                        <thead>
+                                            <tr>
+                                                <th style="width:10%">Product Id</th>
+                                                <th style="width:10%">SKU</th>
+                                                <th style="width:10%">Name</th>
+                                                <th style="width:15%">Quantity</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach (var it in item.Items)
+                                            {
+                                                <tr>
+                                                    <td>@it.ProductId</td>
+                                                    <td>@it.Sku</td>
+                                                    <td>@it.Name</td>
+                                                    <td style="width:15%;">@it.Quantity</td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="text-muted">No items.</div>
+                            }
+                        </td>
+                    </tr>
+                }
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    private enum SortColumn { None, Id, Date, Status, Items }
+    private SortColumn _sortColumn = SortColumn.None;
+    private bool _sortDescending;
+
+    [Parameter] public IEnumerable<OrderSummaryDto>? Items { get; set; } = Array.Empty<OrderSummaryDto>();
+    [Parameter] public int CurrentPage { get; set; }
+    [Parameter] public int PageSize { get; set; } = 10;
+    [Parameter] public int TotalItems { get; set; }
+
+    [Parameter] public EventCallback<(int currentPage, int pageSize)> OnPageChange { get; set; }
+    [Parameter] public EventCallback<int> OnEdit { get; set; }
+    [Parameter] public EventCallback<int> OnDelete { get; set; }
+    [Parameter] public EventCallback<(int id, string next)> OnChangeStatus { get; set; }
+
+    private HashSet<int> Expanded { get; } = new();
+    private HashSet<int> BusyIds { get; } = new();
+
+    /// <summary>
+    /// Returns the list of orders sorted by the current choice (column + direction).
+    /// </summary>
+    /// <returns>The sorted list to show in the table.</returns>
+    private IEnumerable<OrderSummaryDto> GetSortedItems()
+    {
+        var data = Items ?? Enumerable.Empty<OrderSummaryDto>();
+
+        return _sortColumn switch
+        {
+            SortColumn.Id    => _sortDescending ? data.OrderByDescending(x => x.Id)
+                                       : data.OrderBy(x => x.Id),
+
+            SortColumn.Date  => _sortDescending ? data.OrderByDescending(x => x.CreatedAt)
+                                       : data.OrderBy(x => x.CreatedAt),
+
+            SortColumn.Status => _sortDescending ? data.OrderByDescending(x => x.Status)
+                                        : data.OrderBy(x => x.Status),
+
+            SortColumn.Items => _sortDescending ? data.OrderByDescending(x => x.LineCount)
+                                       : data.OrderBy(x => x.LineCount),
+
+            _ => data // no sorting → keep incoming order (usually newest-first from API)
+        };
+    }
+
+    /// <summary>
+    /// Handles clicks on a header. Clicking the same header flips the sort direction.
+    /// Clicking a different header starts a new sort on that column (ascending).
+    /// </summary>
+    /// <param name="column">The column to sort by.</param>
+    /// <returns>Nothing.</returns>
+    private void SortBy(SortColumn column)
+    {
+        if (_sortColumn == column)
+            _sortDescending = !_sortDescending;
+        else
+        {
+            _sortColumn = column;
+            _sortDescending = false;
+        }
+    }
+
+    /// <summary>
+    /// Shows ▲ or ▼ next to the active header to tell the sort direction.
+    /// </summary>
+    /// <param name="col">The header column.</param>
+    /// <returns>The arrow text, or empty if this header is not active.</returns>
+    private string SortIndicator(SortColumn column)
+        => _sortColumn == column ? (_sortDescending ? "▼" : "▲") : string.Empty;
+
+    /// <summary>
+    /// Tries to change the status of one order. Asks for confirm on risky steps,
+    /// then calls the parent callback or the API, and finally refreshes the view.
+    /// </summary>
+    /// <param name="id">Order ID.</param>
+    /// <param name="next">New status text.</param>
+    /// <returns>An async task.</returns>
+    private async Task ChangeStatusAsync(int id, string next)
+    {
+        if (OrderStatusHelper.ShouldConfirm(next))
+        {
+            var ok = await JS.InvokeAsync<bool>("confirm", $"Are you sure you want to set order #{id} to {next}?");
+            if (!ok) return;
+        }
+
+        try
+        {
+            BusyIds.Add(id);
+            if (OnChangeStatus.HasDelegate) await OnChangeStatus.InvokeAsync((id, next));
+            else
+            {
+                await OrderService.ChangeStatusAsync(id, new ChangeStatusDto { Status = next });
+                await ShowToastAsync($"Order #{id} → {next}", true);
+            }
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync(ex.Message, false);
+        }
+        finally
+        {
+            BusyIds.Remove(id);
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>
+    /// Starts editing the selected order. If a parent handler exists, I call it;
+    /// otherwise I show a small message for now.
+    /// </summary>
+    /// <param name="id">Order ID to edit.</param>
+    /// <returns>An async task.</returns>
+    private Task EditAsync(int id)
+        => OnEdit.HasDelegate ? OnEdit.InvokeAsync(id)
+                              : ShowToastAsync("Open Edit UI (Draft only).", true);
+
+    /// <summary>
+    /// Deletes an order after the user confirms. Uses a parent handler if available,
+    /// otherwise calls the API directly and shows a message.
+    /// </summary>
+    /// <param name="id">Order ID to delete.</param>
+    /// <returns>An async task.</returns>
+    private async Task DeleteAsync(int id)
+    {
+        var ok = await JS.InvokeAsync<bool>("confirm", $"Delete order #{id}? This cannot be undone.");
+        if (!ok) return;
+
+        try
+        {
+            BusyIds.Add(id);
+            if (OnDelete.HasDelegate) await OnDelete.InvokeAsync(id);
+            else
+            {
+                var deleted = await OrderService.DeleteAsync(id);
+                await ShowToastAsync(deleted ? $"Order #{id} deleted." : $"Order #{id} not found.", deleted);
+            }
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync(ex.Message, false);
+        }
+        finally
+        {
+            BusyIds.Remove(id);
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>
+    /// Expands or collapses the details row for a given order.
+    /// </summary>
+    /// <param name="id">Order ID to toggle.</param>
+    /// <returns>Nothing.</returns>
+    private void Toggle(int id)
+    {
+        if (!Expanded.Add(id))
+            Expanded.Remove(id);
+    }
+
+    /// <summary>
+    /// Shows a simple alert message. Used as a lightweight "toast" in this project.
+    /// </summary>
+    /// <param name="message">Text to show.</param>
+    /// <param name="success">True for success style, false for error style.</param>
+    /// <returns>An async task.</returns>
+    private Task ShowToastAsync(string message, bool success)
+        => JS.InvokeVoidAsync("alert", (success ? "✅ " : "❌ ") + message).AsTask();
+
+    /// <summary>
+    /// Placeholder for reloading data after changes. Parent page can replace this with real reload logic.
+    /// </summary>
+    /// <returns>An already completed task.</returns>
+    private Task ReloadAsync() => Task.CompletedTask;
+}

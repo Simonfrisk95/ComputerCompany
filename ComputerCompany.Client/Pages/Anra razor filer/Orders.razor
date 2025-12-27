@@ -1,0 +1,495 @@
+﻿@page "/Orders"
+@rendermode InteractiveWebAssembly
+
+@using Microsoft.AspNetCore.Components.Authorization
+@using ShoeCompany.Client.components
+@using Microsoft.AspNetCore.WebUtilities
+@using ShoeCompany.Client.Services
+@using ShoeCompany.Shared.DTO
+
+
+@inject OrderFlowApi OrderService
+@inject NavigationManager Nav
+@inject AuthenticationStateProvider Auth
+
+@attribute [Authorize]
+
+<h3>Orders</h3>
+
+@* Page-level alerts *@
+@if (!string.IsNullOrEmpty(AlertMessage))
+{
+    <div class="alert alert-@AlertType alert-dismissible fade show" role="alert">
+        @AlertMessage
+        <button type="button" class="btn-close" @onclick="() => DismissAlert()"></button>
+    </div>
+}
+
+<!-- Filters -->
+<div class="row mb-3">
+    <div class="d-flex justify-content-end mb-3">
+        <button class="btn btn-success" @onclick="OpenCreateModal">
+            + New Order
+        </button>
+    </div>
+
+    <div class="col-md-4 mb-2">
+        <input class="form-control" placeholder="Search by Order ID..." @bind="SearchTerm" />
+    </div>
+
+    <div class="col-md-3 mb-2">
+        <select class="form-select" @bind="SelectedStatus">
+            <option value="">All Statuses</option>
+            <option>Draft</option>
+            <option>Picked</option>
+            <option>Shipped</option>
+            <option>Delivered</option>
+            <option>Sent</option>
+            <option>Cancelled</option>
+        </select>
+    </div>
+
+    <div class="col-md-3 mb-2">
+        <input type="date" class="form-control" @bind="SelectedDate" />
+    </div>
+
+    <div class="col-md-2 mb-2 d-flex gap-2 justify-content-end">
+        <button class="btn btn-outline-secondary w-100" @onclick="ApplyFilters">Apply</button>
+        <button class="btn btn-outline-secondary w-100" @onclick="ResetFilters">Reset</button>
+    </div>
+</div>
+
+<!-- Table -->
+<OrderTable Items="OrderList" CurrentPage="CurrentPage" PageSize="PageSize" TotalItems="TotalItems" OnEdit="EditOrder"
+    OnDelete="DeleteOrder" OnChangeStatus="@OnChangeStatusCallback" />
+
+<!-- Pagination (skip/take) -->
+@if (PageCount > 1)
+{
+    <div class="d-flex align-items-center justify-content-between mt-3">
+        <div class="text-muted small">
+            Showing @FirstItemIndex–@LastItemIndex of @TotalItems
+        </div>
+
+        <div class="d-flex gap-2 align-items-center">
+            <nav>
+                <ul class="pagination pagination-sm mb-0">
+                    <li class="page-item @(CurrentPage == 1 ? "disabled" : null)">
+                        <button class="page-link" @onclick="() => GoToPage(CurrentPage - 1)">Previous</button>
+                    </li>
+
+                    @foreach (var p in VisiblePages())
+                    {
+                        <li class="page-item @(p == CurrentPage ? "active" : null)">
+                            <button class="page-link" @onclick="() => GoToPage(p)">@p</button>
+                        </li>
+                    }
+
+                    <li class="page-item @(CurrentPage == PageCount ? "disabled" : null)">
+                        <button class="page-link" @onclick="() => GoToPage(CurrentPage + 1)">Next</button>
+                    </li>
+                </ul>
+            </nav>
+        </div>
+    </div>
+}
+
+<!-- Modal -->
+<OrderModal Title="@ModalTitle"
+            Order="@SelectedOrder"
+            IsOpen="@IsModalOpen"
+            SubmitText="@_modalSubmitText"
+            OnSubmit="SaveOrder"
+            OnClose="CloseModal" />
+
+
+@code {
+    private List<OrderSummaryDto> OrderList = new();
+    private string? SearchTerm;
+    private string SelectedStatus = "";
+    private DateTime? SelectedDate;
+
+    private int skip = 0; // 0-based offset
+    private int take = 10; // page size (limit)
+    private int TotalItems = 0;
+
+    private int CurrentPage => Math.Max(1, (skip / Math.Max(1, take)) + 1);
+    private int PageSize => take;
+    private int PageCount => Math.Max(1, (int)Math.Ceiling((double)TotalItems / Math.Max(1, take)));
+    private int FirstItemIndex => TotalItems == 0 ? 0 : skip + 1;
+    private int LastItemIndex => Math.Min(skip + take, TotalItems);
+
+    private bool IsModalOpen = false;
+    private string ModalTitle = "New Order";
+    private CreateOrderDto SelectedOrder = new();
+
+    private string? AlertMessage;
+    private string AlertType = "info";
+    private CancellationTokenSource? cancellationTokenSource;
+
+    private bool _bootstrapped;
+
+    private int? _editingOrderId = null;
+    private string _modalSubmitText = "Save Order";
+
+    /// <summary>
+    /// Runs after the page renders. I use it to read query params and load the first page once.
+    /// </summary>
+    /// <param name="firstRender">True only on the first render.</param>
+    /// <returns>A task that finishes after the first load.</returns>
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _bootstrapped) return;
+
+        ReadQuery();
+
+        var state = await Auth.GetAuthenticationStateAsync();
+        if (state.User.Identity?.IsAuthenticated == true)
+        {
+            await LoadPageAsync();
+        }
+
+        _bootstrapped = true;
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Reads filters and paging (skip/take) from the URL query string.
+    /// </summary>
+    /// <returns>Nothing.</returns>
+    private void ReadQuery()
+    {
+        var uri = Nav.ToAbsoluteUri(Nav.Uri);
+        var q = QueryHelpers.ParseQuery(uri.Query);
+
+        if (q.TryGetValue("skip", out var sv) && int.TryParse(sv, out var s) && s >= 0)
+            skip = s;
+
+        if (q.TryGetValue("take", out var tv) && int.TryParse(tv, out var t))
+            take = Math.Clamp(t, 1, 100);
+
+        if (q.TryGetValue("q", out var qv))
+            SearchTerm = qv.ToString();
+
+        if (q.TryGetValue("status", out var sv2))
+            SelectedStatus = sv2.ToString();
+
+        if (q.TryGetValue("date", out var dv) && DateTime.TryParse(dv, out var d))
+            SelectedDate = d.Date;
+    }
+
+/// <summary>
+/// Writes the current filters and paging (skip/take) back to the URL,
+/// omitting any empty filters.
+/// </summary>
+private void WriteQuery()
+{
+    var basePath = Nav.ToAbsoluteUri(Nav.Uri).GetLeftPart(UriPartial.Path);
+
+    var qs = new Dictionary<string, string?>
+    {
+        ["skip"] = skip.ToString(),
+        ["take"] = take.ToString()
+    };
+
+    if (!string.IsNullOrWhiteSpace(SearchTerm))
+        qs["q"] = SearchTerm!;
+
+    if (!string.IsNullOrWhiteSpace(SelectedStatus))
+        qs["status"] = SelectedStatus!;
+
+    if (SelectedDate.HasValue)
+        qs["date"] = SelectedDate.Value.ToString("yyyy-MM-dd");
+
+    var url = QueryHelpers.AddQueryString(basePath, qs);
+    Nav.NavigateTo(url, replace: true);
+}
+
+    /// <summary>
+    /// Loads the current page of orders from the API using the active filters.
+    /// </summary>
+    /// <returns>A task that finishes after the list and total are set.</returns>
+    private async Task LoadPageAsync()
+    {
+        // Parse Order ID only (we don't have customer yet)
+        int? orderId = null;
+        if (!string.IsNullOrWhiteSpace(SearchTerm) && int.TryParse(SearchTerm, out var parsedId) && parsedId > 0)
+            orderId = parsedId;
+
+        // Exact date filter: [date, date+1 day)
+        DateTime? from = null;
+        DateTime? to = null;
+        if (SelectedDate.HasValue)
+        {
+            from = SelectedDate.Value.Date;
+            to = SelectedDate.Value.Date.AddDays(1); // exclusive end
+        }
+
+        var hasFilter =
+        orderId.HasValue ||
+        !string.IsNullOrWhiteSpace(SelectedStatus) ||
+        SelectedDate.HasValue;
+
+        PaginationResult<OrderSummaryDto>? result =
+        hasFilter
+        ? await OrderService.SearchAsync(skip, take,
+        id: orderId,
+        status: SelectedStatus,
+        from: from,
+        to: to,
+        sku: null, // <-- do NOT pass SearchTerm as sku
+        openOnly: false)
+        : await OrderService.ListPagedAsync(skip, take);
+
+        OrderList = result?.Items?.ToList() ?? new();
+        TotalItems = result?.Total ?? 0;
+
+        // Clamp skip if total shrank (e.g., after delete)
+        var maxSkip = Math.Max(0, (PageCount - 1) * take);
+        if (skip > maxSkip) skip = maxSkip;
+
+        WriteQuery();
+    }
+
+
+    /// <summary>
+    /// Moves to a specific page number and reloads data.
+    /// </summary>
+    /// <param name="page">1-based page number to go to.</param>
+    /// <returns>A task that finishes after reload.</returns>
+    private async Task GoToPage(int page)
+    {
+        page = Math.Max(1, Math.Min(PageCount, page));
+        var newSkip = (page - 1) * take;
+        if (newSkip == skip) return;
+
+        skip = newSkip;
+        await LoadPageAsync();
+    }
+
+    /// <summary>
+    /// Yields a short list of page numbers to show in the pager (a sliding window).
+    /// </summary>
+    /// <returns>Page numbers to render.</returns>
+    private IEnumerable<int> VisiblePages()
+    {
+        const int window = 5;
+        var start = Math.Max(1, CurrentPage - window / 2);
+        var end = Math.Min(PageCount, start + window - 1);
+        start = Math.Max(1, end - window + 1);
+        for (var p = start; p <= end; p++) yield return p;
+    }
+
+    /// <summary>
+    /// Applies current filters and reloads from page 1.
+    /// </summary>
+    /// <returns>A task that finishes after reload.</returns>
+    private async Task ApplyFilters()
+    {
+        skip = 0;
+        await LoadPageAsync();
+    }
+
+    /// <summary>
+    /// Resets all filters and reloads from page 1.
+    /// </summary>
+    /// <returns>A task that finishes after reload.</returns>
+    private async Task ResetFilters()
+    {
+        SearchTerm = "";
+        SelectedStatus = "";
+        SelectedDate = null;
+        skip = 0;
+        await LoadPageAsync();
+    }
+
+    /// <summary>
+    /// Opens the "create new order" modal with an empty form.
+    /// </summary>
+    /// <returns>Nothing.</returns>
+    private void OpenCreateModal()
+    {
+        SelectedOrder = new CreateOrderDto
+        {
+            Lines = new List<CreateOrderLineDto>(),
+            Notes = ""
+        };
+
+        _editingOrderId = null; 
+        ModalTitle = "New Order";
+        IsModalOpen = true;
+    }
+
+    /// <summary>
+    /// Saves the modal form. If editing, updates the order; if new, creates it.
+    /// Then closes the modal and reloads the list.
+    /// </summary>
+    /// <param name="dto">The order data from the modal.</param>
+    /// <returns>A task that finishes after save and reload.</returns>
+    private async Task SaveOrder(CreateOrderDto dto)
+    {
+        try
+        {
+            if (_editingOrderId is int id) // EDIT
+            {
+                var update = new UpdateOrderDto
+                {
+                    Notes = dto.Notes,
+                    Lines = dto.Lines.Select(l => new UpdateOrderLineDto
+                    {
+                        ProductId = l.ProductId,
+                        Quantity  = l.Quantity
+                    }).ToList()
+                };
+
+                await OrderService.UpdateAsync(id, update);
+                Toast($"Order #{id} updated.", "success");
+            }
+            else // CREATE
+            {
+                var created = await OrderService.CreateAsync(dto);
+                Toast($"Order #{created?.Id ?? 0} created.", "success");
+            }
+
+            IsModalOpen = false;
+            _editingOrderId = null;
+            await LoadPageAsync();
+        }
+        catch (Exception ex)
+        {
+            // Your modal already shows this when it rethrows via OnSubmit; keeping here helps page-level alerts too
+            Toast(ex.Message, "warning");
+        }
+    }
+
+    /// <summary>
+    /// Opens the edit modal by loading the full order (with lines) and mapping it to the form.
+    /// </summary>
+    /// <param name="orderId">The order ID to edit.</param>
+    /// <returns>A task that finishes when the modal is ready.</returns>
+    private async Task EditOrder(int orderId)
+    {
+        // Get the FULL order (with lines)
+        var order = await OrderService.GetByIdAsync(orderId);
+        if (order is null)
+        {
+            await ShowAlertAsync($"Order #{orderId} not found.", "warning");
+            return;
+        }
+
+        // Map to the modal’s CreateOrderDto (keep your field names)
+        SelectedOrder = new CreateOrderDto
+        {
+            Notes = order.Notes ?? string.Empty,
+            Lines = order.Lines?.Select(i => new CreateOrderLineDto
+            {
+                ProductId = i.ProductId,
+                Quantity = i.Quantity
+            }).ToList() ?? new List<CreateOrderLineDto>()
+        };
+
+        _editingOrderId = orderId;
+        ModalTitle = $"Edit Order #{order.Id}";
+        IsModalOpen = true;
+    }
+
+    /// <summary>
+    /// Deletes an order and reloads the list. Shows a message for success or problems.
+    /// </summary>
+    /// <param name="orderId">The order ID to delete.</param>
+    /// <returns>A task that finishes after delete and reload.</returns>
+    private async Task DeleteOrder(int orderId)
+    {
+        try
+        {
+            var ok = await OrderService.DeleteAsync(orderId);
+            if (ok)
+            {
+                Toast($"Order #{orderId} deleted.", "success");
+                await LoadPageAsync();
+            }
+            else
+            {
+                Toast($"Order #{orderId} not found.", "warning");
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            // This shows the ProblemDetails.Detail from the API (e.g., “Only Draft orders can be deleted. Current status: Shipped.”)
+            Toast(ex.Message, "warning");
+        }
+    }
+
+    /// <summary>
+    /// Receives a status change from the table and updates the order on the server.
+    /// </summary>
+    /// <param name="args">Tuple with (orderId, newStatus).</param>
+    /// <returns>A task that finishes after the change and reload.</returns>
+    private async Task ChangeOrderStatus((int orderId, string newStatus) args)
+    {
+        await OrderService.ChangeStatusAsync(args.orderId, new ChangeStatusDto { Status = args.newStatus });
+        await LoadPageAsync();
+    }
+
+    /// <summary>
+    /// Binds the table's OnChangeStatus to this page handler.
+    /// </summary>
+    private EventCallback<(int, string)> OnChangeStatusCallback =>
+    EventCallback.Factory.Create<(int, string)>(this, ChangeOrderStatus);
+
+    /// <summary>
+    /// Closes the modal and clears edit state.
+    /// </summary>
+    /// <returns>Nothing.</returns>
+    private void CloseModal()
+    {
+        IsModalOpen = false;
+        _editingOrderId = null; 
+    }
+
+    /// <summary>
+    /// Shows an alert for a few seconds, then hides it automatically.
+    /// </summary>
+    /// <param name="message">Text to show.</param>
+    /// <param name="type">Bootstrap type (info, success, warning, danger).</param>
+    /// <param name="seconds">How long to show the alert.</param>
+    /// <returns>A task that finishes after the timer completes or is cancelled.</returns>
+    private async Task ShowAlertAsync(string message, string type = "info", int seconds = 2)
+    {
+        cancellationTokenSource?.Cancel();
+        cancellationTokenSource = new CancellationTokenSource();
+
+        AlertMessage = message;
+        AlertType = type;
+        StateHasChanged();
+
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(seconds), cancellationTokenSource.Token);
+            AlertMessage = null;
+            StateHasChanged();
+        }
+        catch (TaskCanceledException) { }
+    }
+
+    /// <summary>
+    /// Hides the current alert immediately.
+    /// </summary>
+    /// <returns>Nothing.</returns>
+    private void DismissAlert()
+    {
+        cancellationTokenSource?.Cancel();
+        AlertMessage = null;
+    }
+
+    /// <summary>
+    /// Quick helper to set an alert message and re-render.
+    /// </summary>
+    /// <param name="message">Text to show.</param>
+    /// <param name="type">Bootstrap type (info, success, warning, danger).</param>
+    /// <returns>Nothing.</returns>
+    private void Toast(string message, string type = "info")
+    {
+        AlertMessage = message; AlertType = type; StateHasChanged();
+    }
+}

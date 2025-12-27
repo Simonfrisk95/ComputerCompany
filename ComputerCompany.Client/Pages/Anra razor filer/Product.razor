@@ -1,0 +1,149 @@
+@page "/product"
+@inject ProductApi ProductService
+@using ShoeCompany.Client.Services
+@using ShoeCompany.Shared.DTO
+@using ShoeCompany.Client.components
+@rendermode InteractiveWebAssembly
+
+@attribute [Authorize]
+
+<h3>Products</h3>
+
+<!-- Filters -->
+<div class="row mb-3">
+    <div class="d-flex justify-content-end mb-3">
+        <button class="btn btn-success" @onclick="OpenCreateModal">
+            + Create Product
+        </button>
+    </div>
+
+    <!-- Search -->
+    <div class="col-md-4 mb-2">
+        <input class="form-control" placeholder="Search by name or SKU..." @bind="SearchTerm" />
+    </div>
+
+    <!-- Location filter -->
+    <div class="col-md-3 mb-2">
+        <select class="form-select" @bind="SelectedLocation">
+            <option value="">All Locations</option>
+            @foreach (var loc in Locations)
+            {
+                <option value="@loc">@loc</option>
+            }
+        </select>
+    </div>
+
+    <!-- Stock filter -->
+    <div class="col-md-3 mb-2">
+        <select class="form-select" @bind="SelectedStockStatus">
+            <option value="">All Stock</option>
+            <option value="InStock">In Stock</option>
+            <option value="OutOfStock">Out of Stock</option>
+        </select>
+    </div>
+
+    <div class="col-md-2 mb-2 d-flex justify-content-end">
+        <button class="btn btn-outline-secondary w-100" @onclick="ResetFilters">Reset</button>
+    </div>
+</div>
+
+<!-- Table -->
+<ProductTable TItem="ProductDto" Items="FilteredProducts.ToList()" CurrentPage="CurrentPage" PageSize="PageSize"
+    TotalItems="TotalItems" OnEdit="EditProduct" OnDelete="DeleteProduct" OnPageChanged="LoadPage" />
+
+<!-- Modal -->
+<ProductModal Title="@ModalTitle" Product="@SelectedProduct" IsOpen="@IsModalOpen" OnSubmit="SaveProduct"
+    OnClose="CloseModal" />
+
+@code {
+    private List<ProductDto> Products = new();
+    private string? SearchTerm;
+    private string SelectedLocation = "";
+    private string SelectedStockStatus = "";
+
+    private int CurrentPage = 1;
+    private int PageSize = 10;
+    private int TotalItems = 0;
+
+    private bool IsModalOpen = false;
+    private string ModalTitle = "Create Product";
+    private ProductDto SelectedProduct = new();
+
+    protected override async Task OnInitializedAsync() => await LoadPage(CurrentPage);
+
+    // Load a specific page of products
+    private async Task LoadPage(int page)
+    {
+        CurrentPage = page;
+        var skip = (page - 1) * PageSize;
+        var result = await ProductService.GetPagedAsync(skip, PageSize, SearchTerm);
+        Products = result?.Items?.ToList() ?? new();
+        TotalItems = result?.Total ?? 0;
+    }
+
+    // Filtered products based on search term, location, and stock status
+    private IEnumerable<ProductDto> FilteredProducts => Products
+    .Where(p => string.IsNullOrWhiteSpace(SearchTerm)
+    || (p.Name ?? "").Contains(SearchTerm, StringComparison.OrdinalIgnoreCase)
+    || (p.SKU ?? "").Contains(SearchTerm, StringComparison.OrdinalIgnoreCase))
+    .Where(p => string.IsNullOrWhiteSpace(SelectedLocation)
+    || p.Location == SelectedLocation)
+    .Where(p => SelectedStockStatus == ""
+    || (SelectedStockStatus == "InStock" && p.Quantity > 0)
+    || (SelectedStockStatus == "OutOfStock" && p.Quantity == 0));
+
+    private List<string> Locations => Products.Select(p => p.Location).Distinct().ToList();
+
+    // Reset all filters
+    private void ResetFilters()
+    {
+        SearchTerm = "";
+        SelectedLocation = "";
+        SelectedStockStatus = "";
+    }
+
+    // Open modal for creating a new product
+    private void OpenCreateModal()
+    {
+        SelectedProduct = new ProductDto();
+        ModalTitle = "Create Product";
+        IsModalOpen = true;
+    }
+
+    // Open modal for editing an existing product
+    private void EditProduct(ProductDto product)
+    {
+        SelectedProduct = new ProductDto
+        {
+            Id = product.Id,
+            SKU = product.SKU,
+            Name = product.Name,
+            Quantity = product.Quantity,
+            Location = product.Location
+        };
+        ModalTitle = "Edit Product";
+        IsModalOpen = true;
+    }
+
+    // Save product (create or update)
+    private async Task SaveProduct(ProductDto product)
+    {
+        if (product.Id == 0)
+            await ProductService.CreateAsync(product);
+        else
+            await ProductService.UpdateAsync(product.Id, product);
+
+        IsModalOpen = false;
+        await LoadPage(CurrentPage);
+    }
+
+    // Delete a product
+    private async Task DeleteProduct(int id)
+    {
+        await ProductService.DeleteAsync(id);
+        await LoadPage(CurrentPage);
+    }
+
+    // Close the modal
+    private void CloseModal() => IsModalOpen = false;
+}
